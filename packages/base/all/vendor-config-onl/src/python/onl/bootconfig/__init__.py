@@ -22,6 +22,8 @@ class OnlBootConfig(object):
     def read(self, bc=None):
         if bc:
             self._readf(bc)
+        elif os.path.exists(self.BOOT_CONFIG_DEFAULT):
+            self._readf(self.BOOT_CONFIG_DEFAULT)
         else:
             from onl.mounts import OnlMountContextReadOnly
             with OnlMountContextReadOnly("ONL-BOOT", logger=None):
@@ -111,19 +113,47 @@ class OnlBootConfigNet(OnlBootConfig):
         self.delete('NETIP')
         self.delete('NETMASK')
         self.delete('NETGW')
+        self.delete('NETDNS')
+        self.delete('NETDOMAIN')
         self.set('NETAUTO', 'dhcp')
+
+    def netauto_get(self):
+        return self.keys.get('NETAUTO', None)
 
     def netip_set(self, addr):
         self.delete('NETAUTO')
         self.keys['NETIP'] = addr
 
+    def netip_get(self):
+        return self.keys.get('NETIP', None)
+
     def netmask_set(self, mask):
         self.delete('NETAUTO')
         self.keys['NETMASK'] = mask
 
+    def netmask_get(self):
+        return self.keys.get('NETMASK', None)
+
     def netgw_set(self, gw):
         self.delete('NETAUTO')
         self.keys['NETGW'] = gw
+
+    def netgw_get(self):
+        return self.keys.get('NETGW', None)
+
+    def netdns_set(self, dns):
+        self.delete('NETAUTO')
+        self.keys['NETDNS'] = dns
+
+    def netdns_get(self):
+        return self.keys.get('NETDNS', None)
+
+    def netdomain_set(self, domain):
+        self.delete('NETAUTO')
+        self.keys['NETDOMAIN'] = domain
+
+    def netdomain_get(self):
+        return self.keys.get('NETDOMAIN', None)
 
     def __validate(self):
         if 'NETAUTO' not in self.keys:
@@ -131,7 +161,7 @@ class OnlBootConfigNet(OnlBootConfig):
             netip = self.keys.get('NETIP', None)
             if netip:
                 if not self.is_ip_address(netip):
-                    raise ValueError("NETIP=%s is not a valid ip-address" % (netup))
+                    raise ValueError("NETIP=%s is not a valid ip-address" % (netip))
             elif self.NET_REQUIRED:
                 raise ValueError("No IP configuration set for the management interface.")
 
@@ -156,7 +186,12 @@ class OnlBootConfigNet(OnlBootConfig):
             elif netip or netmask or netgw:
                 raise ValueError("Incomplete static network configuration. NETIP, NETMASK, and NETGW must all be set.")
 
-        elif self.keys['NETAUTO'] not in ['dhcp', 'up']:
+            netdns = self.keys.get('NETDNS', None)
+            if netdns:
+                if not self.is_ip_address(netdns):
+                    raise ValueError("NETDNS=%s is not a valid ip-address" % (netdns))
+
+        elif self.keys['NETAUTO'] not in ['dhcp', 'up', 'none', '']:
             raise ValueError("The NETAUTO value '%s' is invalid." % self.keys['NETAUTO'])
         elif self.keys['NETAUTO'] == 'up' and self.NET_REQUIRED:
             raise ValueError("NETAUTO is 'up' but non-local networking is required.")
@@ -202,7 +237,8 @@ class OnlBootConfigNet(OnlBootConfig):
         ap.add_argument("--ip", help='Set static IP address for the management interface.', type=OnlBootConfigNet.argparse_type_is_ip_address)
         ap.add_argument("--netmask", help='Set the static netmask for the management interface.', type=OnlBootConfigNet.argparse_type_is_netmask)
         ap.add_argument("--gateway", help='Set the gateway address.', type=OnlBootConfigNet.argparse_type_is_ip_address)
-
+        ap.add_argument("--dns", help='Set the dns server.', type=OnlBootConfigNet.argparse_type_is_ip_address)
+        ap.add_argument("--domain", help='Set the dns domain.')
 
     def __argparse_process(self, ops):
         if ops.dhcp:
@@ -217,8 +253,13 @@ class OnlBootConfigNet(OnlBootConfig):
         if ops.gateway:
             self.netgw_set(ops.gateway)
 
+        if ops.dns:
+            self.netdns_set(ops.dns)
+
+        if ops.domain:
+            self.netdomain_set(ops.domain)
+
 
 if __name__ == '__main__':
     bc = OnlBootConfigNet()
     bc.main("onl-boot-config")
-

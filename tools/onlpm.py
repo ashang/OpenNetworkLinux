@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python2
 ############################################################
 #
 # ONL Package Management
@@ -69,10 +69,17 @@ class OnlPackageServiceScript(object):
 
 class OnlPackageAfterInstallScript(OnlPackageServiceScript):
     SCRIPT = """#!/bin/sh
-set -e
 if [ -x "/etc/init.d/%(service)s" ]; then
-	update-rc.d %(service)s defaults >/dev/null
-	invoke-rc.d %(service)s start || exit $?
+    if [ -x "/usr/sbin/policy-rc.d" ]; then
+        /usr/sbin/policy-rc.d
+        if [ $? -eq 101 ]; then
+            echo "warning: service %(service)s: postinst: ignored due to policy-rc.d"
+            exit 0;
+        fi
+    fi
+    set -e
+    update-rc.d %(service)s defaults >/dev/null
+    invoke-rc.d %(service)s start || exit $?
 fi
 """
 
@@ -80,7 +87,7 @@ class OnlPackageBeforeRemoveScript(OnlPackageServiceScript):
     SCRIPT = """#!/bin/sh
 set -e
 if [ -x "/etc/init.d/%(service)s" ]; then
-	invoke-rc.d %(service)s stop || exit $?
+    invoke-rc.d %(service)s stop || exit $?
 fi
 """
 
@@ -88,7 +95,7 @@ class OnlPackageAfterRemoveScript(OnlPackageServiceScript):
     SCRIPT = """#!/bin/sh
 set -e
 if [ "$1" = "purge" ] ; then
-	update-rc.d %(service)s remove >/dev/null
+    update-rc.d %(service)s remove >/dev/null
 fi
 """
 
@@ -242,12 +249,13 @@ class OnlPackage(object):
         return True
 
 
-    def _validate_files(self):
+    def _validate_files(self, key, required=True):
         """Validate the existence of the required input files for the current package."""
-        self.pkg['files'] = onlu.validate_src_dst_file_tuples(self.dir,
-                                                              self.pkg['files'],
-                                                              dict(PKG=self.pkg['name'], PKG_INSTALL='/usr/share/onl/packages/%s/%s' % (self.pkg['arch'], self.pkg['name'])),
-                                                              OnlPackageError)
+        self.pkg[key] = onlu.validate_src_dst_file_tuples(self.dir,
+                                                          self.pkg[key],
+                                                          dict(PKG=self.pkg['name'], PKG_INSTALL='/usr/share/onl/packages/%s/%s' % (self.pkg['arch'], self.pkg['name'])),
+                                                          OnlPackageError,
+                                                          required=required)
     def _validate(self):
         """Validate the package contents."""
 
@@ -273,7 +281,7 @@ class OnlPackage(object):
         return True
 
     @staticmethod
-    def copyf(src, dst, root):
+    def copyf(src, dst, root, symlinks=False):
         if dst.startswith('/'):
             dst = dst[1:]
 
@@ -283,7 +291,7 @@ class OnlPackage(object):
             #
             dstpath = os.path.join(root, dst)
             logger.debug("Copytree %s -> %s" % (src, dstpath))
-            shutil.copytree(src, dstpath)
+            shutil.copytree(src, dstpath, symlinks=symlinks)
         else:
             #
             # If the destination ends in a '/' it means copy the filename
@@ -293,8 +301,11 @@ class OnlPackage(object):
             #
             if dst.endswith('/'):
                 dstpath = os.path.join(root, dst)
-                if not os.path.exists(dstpath):
+                try:
                     os.makedirs(dstpath)
+                except OSError, e:
+                    if e.errno != os.errno.EEXIST:
+                        raise
                 shutil.copy(src, dstpath)
             else:
                 dstpath = os.path.join(root, os.path.dirname(dst))
@@ -328,7 +339,10 @@ class OnlPackage(object):
 
         # Make sure all required files exist
         if 'files' in self.pkg:
-            self._validate_files()
+            self._validate_files('files', True)
+
+        if 'optional-files' in self.pkg:
+            self._validate_files('optional-files', False)
 
         # If dir_ is not specified, leave package in local package directory.
         if dir_ is None:
@@ -342,11 +356,20 @@ class OnlPackage(object):
         self.pkg['__workdir'] = workdir
 
         for (src,dst) in self.pkg.get('files', {}):
-            OnlPackage.copyf(src, dst, root)
+            OnlPackage.copyf(src, dst, root, symlinks=self.pkg.get('symlinks', False))
 
-        for (link,src) in self.pkg.get('links', {}).iteritems():
+        for (src,dst) in self.pkg.get('optional-files', {}):
+            if os.path.exists(src):
+                OnlPackage.copyf(src, dst, root)
+
+        for (link, src) in self.pkg.get('links', {}).iteritems():
             logger.info("Linking %s -> %s..." % (link, src))
-            link = os.path.join(root, link)
+            # The source must be relative to the existing root directory.
+            if link.startswith('/'):
+                link = "%s%s" % (root, link)
+            else:
+                link = "%s/%s" % (root, link)
+            # The link must be relative or absolute to the final filesystem.
             os.symlink(src, link)
 
         #
@@ -423,14 +446,15 @@ class OnlPackage(object):
             if self.pkg.get('init-after-remove', True):
                 command = command + "--after-remove %s " % OnlPackageAfterRemoveScript(self.pkg['init'], dir=workdir).name
 
-        if self.pkg.get('asr', True):
-            # Generate the ASR documentation for this package.
-            sys.path.append("%s/sm/infra/tools" % os.getenv('ONL'))
-            import asr
-            asro = asr.AimSyslogReference()
-            asro.extract(workdir)
-            asro.format(os.path.join(docpath, asr.AimSyslogReference.ASR_NAME), 'json')
-
+        if self.pkg.get('asr', False):
+            with onlu.Profiler() as profiler:
+                # Generate the ASR documentation for this package.
+                sys.path.append("%s/sm/infra/tools" % os.getenv('ONL'))
+                import asr
+                asro = asr.AimSyslogReference()
+                asro.extract(workdir)
+                asro.format(os.path.join(docpath, asr.AimSyslogReference.ASR_NAME), 'json')
+            profiler.log("ASR generation for %(name)s" % self.pkg)
         ############################################################
 
         if logger.level < logging.INFO:
@@ -480,7 +504,10 @@ class OnlPackageGroup(object):
             return True
 
     def prerequisite_packages(self):
-        return list(onlu.sflatten(self._pkgs.get('prerequisites', {}).get('packages', [])))
+        rv = []
+        for e in list(onlu.sflatten(self._pkgs.get('prerequisites', {}).get('packages', []))):
+            rv += e.split(',')
+        return rv
 
     def prerequisite_submodules(self):
         return self._pkgs.get('prerequisites', {}).get('submodules', [])
@@ -745,7 +772,7 @@ class OnlPackageRepo(object):
                         logger.debug("Existing extract for %s matches the package file." % pkg)
                     else:
                         # Existing extract must be removed.
-                        logger.warn("Existing extract for %s does not match." % pkg)
+                        logger.info("Existing extract for %s does not match." % pkg)
                         force=True
                 else:
                     # Status unknown. Really shouldn't happen.
@@ -804,9 +831,14 @@ class OnlPackageRepo(object):
         force: Passed to extract() as the force option."""
 
         edir = self.extract(pkg, force=force)
-        for root, dirs, files in os.walk(edir):
-            if os.path.basename(root) == dirname and root != edir:
-                return root
+        if os.path.isabs(dirname):
+            apath = os.path.join(edir, dirname[1:]);
+            if os.path.isdir(apath):
+                return apath
+        else:
+            for root, dirs, files in os.walk(edir):
+                if os.path.basename(root) == dirname and root != edir:
+                    return root
 
         if ex:
             raise OnlPackageMissingDirError(pkg, dirname)
@@ -1218,13 +1250,14 @@ if __name__ == '__main__':
         if ops.list_all:
             print pm
 
+        if ops.pmake:
+            pm.pmake()
+
+
         pm.filter(subdir = ops.subdir, arches=ops.arches)
 
         if ops.list:
             print pm
-
-        if ops.pmake:
-            pm.pmake()
 
         if ops.pkg_info:
             print pm.pkg_info()
@@ -1328,6 +1361,11 @@ if __name__ == '__main__':
         ############################################################
         if ops.delete:
             pm.opr.remove_packages(ops.delete)
+
+        if ops.lookup:
+            logger.debug("looking up %s", ops.lookup)
+            for p in pm.opr.lookup_all(ops.lookup):
+                print p
 
     except (OnlPackageError, onlyaml.OnlYamlError), e:
         logger.error(e)

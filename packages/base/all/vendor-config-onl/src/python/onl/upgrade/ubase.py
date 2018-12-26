@@ -16,7 +16,7 @@ import argparse
 import yaml
 from time import sleep
 
-from onl.platform.current import OnlPlatform
+from onl.platform.current import OnlPlatform, OnlPlatformName
 from onl.mounts import OnlMountManager, OnlMountContextReadOnly, OnlMountContextReadWrite
 
 class BaseUpgrade(object):
@@ -76,6 +76,7 @@ class BaseUpgrade(object):
         self.ap.add_argument("--check", action='store_true', help="Check only.")
         self.ap.add_argument("--auto-upgrade", help="Override auto-upgrade mode.", default=self.auto_upgrade_default())
         self.ap.add_argument("--summarize", action='store_true', help="Summarize only, no upgrades.")
+        self.ap.add_argument("--quiet", action='store_true', help="No output.")
 
     def banner(self):
         self.logger.info("************************************************************")
@@ -163,7 +164,7 @@ class BaseUpgrade(object):
             return default
 
 
-    UPGRADE_STATUS_JSON = "/lib/platform-config/current/onl/upgrade.json"
+    UPGRADE_STATUS_JSON = "/lib/platform-config/%s/onl/upgrade.json" % (OnlPlatformName)
 
     @staticmethod
     def upgrade_status_get():
@@ -366,6 +367,8 @@ If you choose not to perform this upgrade booting cannot continue.""" % self.aty
 
     def main(self):
         self.ops = self.ap.parse_args()
+        if self.ops.quiet:
+            self.logger.setLevel(logging.WARNING)
         self.banner()
         self.init_upgrade()
         self.summarize()
@@ -391,8 +394,13 @@ class BaseOnieUpgrade(BaseUpgrade):
                 dst = os.path.join(self.ONIE_UPDATER_PATH, f)
                 self.copyfile(src, dst)
 
+    def onie_fwpkg_exists(self):
+        import onl.grub
+        return onl.grub.onie_fwpkg_exists()
+
     def onie_fwpkg_add(self, pkg):
         import onl.grub
+        onl.grub.onie_fwpkg("-f purge")
         onl.grub.onie_fwpkg("add %s" % pkg)
         onl.grub.onie_fwpkg("show")
 

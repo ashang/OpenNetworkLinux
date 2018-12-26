@@ -3,6 +3,7 @@ common:
   version: 1.0.0
   copyright: Copyright 2013, 2014, 2015 Big Switch Networks
   maintainer: support@bigswitch.com
+  support: opennetworklinux@googlegroups.com
   depends: base-files
 packages:
   - name: onl-faultd
@@ -15,7 +16,4 @@ packages:
     init: ${ONL}/packages/base/any/faultd/faultd.init
 
     changelog:  Change changes changes.,
-
-
-
-
+    asr: True
